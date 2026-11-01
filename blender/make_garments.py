@@ -4,7 +4,7 @@ import sys, os, math, json, time
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import bpy, bmesh
 from mathutils import Vector, kdtree
-import pattern, drape, styles
+import pattern, drape, styles, hanger
 
 OUT = os.path.join(HERE, "..", "models")
 smooth = lambda a, b, x: (lambda t: t * t * (3 - 2 * t))(max(0.0, min(1.0, (x - a) / (b - a))))
@@ -25,16 +25,33 @@ def laplace(bm, iters=3, k=0.4):
             if nb: new[v] = v.co.lerp(sum(nb, Vector()) / len(nb), k)
         for v, c in new.items(): v.co = c
 
+def add_cavity(ob, iters=7, k=0.5):
+    """Bake fold/crease shading into a vertex colour (multiplied with the fabric in the viewer)."""
+    me = ob.data; bm = bmesh.new(); bm.from_mesh(me); bm.verts.ensure_lookup_table(); bm.normal_update()
+    pos0 = [v.co.copy() for v in bm.verts]; nor = [v.normal.copy() for v in bm.verts]
+    nb = [[e.other_vert(v).index for e in v.link_edges] for v in bm.verts]
+    sm = [c.copy() for c in pos0]
+    for _ in range(iters):
+        sm = [c.lerp(sum((sm[j] for j in ns), Vector()) / len(ns), k) if ns else c for c, ns in zip(sm, nb)]
+    col = me.color_attributes.new("AO", "BYTE_COLOR", "POINT")
+    for i in range(len(pos0)):
+        d = (sm[i] - pos0[i]).dot(nor[i]) / 0.011        # >0: sits below the smoothed surface (a crease)
+        v = 1.0 - 0.42 * max(0.0, min(1.0, d)) + 0.10 * max(0.0, min(1.0, -d))
+        col.data[i].color = (v, v, v, 1)
+    bm.free()
+
 def build_hood(p, neck_back_pt, tree_front=None):
     r = p.get("hood_scale", 1.0)
     bm = bmesh.new()
     bmesh.ops.create_uvsphere(bm, u_segments=28, v_segments=18, radius=1.0)
-    rx, ry, rz = 0.112 * r * (p["neck_w"] / 0.115), 0.082 * r, 0.168 * r
-    c = Vector((0, neck_back_pt.y + ry * 0.92, 0.015))
+    rx, ry, rz = 0.108 * r * (p["neck_w"] / 0.115), 0.04 * r, 0.13 * r
+    c = Vector((0, neck_back_pt.y + ry * 0.7, -0.035))
     for v in bm.verts:
         v.co = Vector((v.co.x * rx, v.co.y * ry, v.co.z * rz))
         # lean the pouch backwards a little and pinch the bottom
-        v.co.y += max(0.0, v.co.z) * 0.12
+        v.co.y += max(0.0, v.co.z) * 0.16
+        if v.co.z > 0: v.co.x *= 1.0 - 0.3 * (v.co.z / rz) ** 2
+        if v.co.z < 0: v.co.y *= 0.55 + 0.45 * smooth(-rz, 0, v.co.z)
         if v.co.z < 0: v.co.x *= 0.82 + 0.18 * smooth(-rz, 0, v.co.z)
         v.co += c
     # face opening on the front-top (the hole you put your face through)
@@ -44,7 +61,7 @@ def build_hood(p, neck_back_pt, tree_front=None):
     me = bpy.data.meshes.new("hood"); bm.to_mesh(me); bm.free()
     ob = bpy.data.objects.new("hood", me); bpy.context.collection.objects.link(ob)
     bpy.context.view_layer.objects.active = ob
-    m = ob.modifiers.new("solid", "SOLIDIFY"); m.thickness = 0.007; m.offset = 1; m.use_rim = True
+    m = ob.modifiers.new("solid", "SOLIDIFY"); m.thickness = 0.011; m.offset = 1; m.use_rim = True
     bpy.ops.object.modifier_apply(modifier="solid")
     for pl in me.polygons: pl.use_smooth = True
     return ob
@@ -128,15 +145,16 @@ def make(name, frames=110):
 
     # thickness + materials
     for pl in sim.polygons: pl.use_smooth = True
-    fabric = make_material("fabric", (1, 1, 1, 1)); plain = make_material("plain", (0.8, 0.8, 0.8, 1)); cord = make_material("cord", (0.92, 0.9, 0.84, 1))
-    sim.materials.append(fabric); sim.materials.append(plain); sim.materials.append(cord)
-    m = fin.modifiers.new("solid", "SOLIDIFY"); m.thickness = 0.006; m.offset = -1; m.use_rim = True; m.material_offset = 1; m.material_offset_rim = 1
+    fabric = make_material("fabric", (1, 1, 1, 1)); plain = make_material("plain", (0.8, 0.8, 0.8, 1)); cord = make_material("cord", (0.92, 0.9, 0.84, 1)); rib = make_material("rib", (1, 1, 1, 1))
+    for mt in (fabric, plain, cord, rib): sim.materials.append(mt)
+    m = fin.modifiers.new("solid", "SOLIDIFY"); m.thickness = 0.007; m.offset = -1; m.use_rim = True; m.material_offset = 1; m.material_offset_rim = 1
     bpy.ops.object.modifier_apply(modifier="solid")
     # weights need the pre-solidify -> post-solidify map: use position (inner verts sit within 6mm of the outer ones)
 
+    add_cavity(fin)
     parts = [fin]
     if p.get("hood"):
-        hood = build_hood(p, neck_back_pt); hood.data.materials.append(plain)
+        hood = build_hood(p, neck_back_pt); hood.data.materials.append(plain); add_cavity(hood, 5, 0.4)
         for pl in hood.data.polygons: pl.material_index = 0
         parts.append(hood)
         for c in build_cords(p, ft, sim):
@@ -224,13 +242,26 @@ def make(name, frames=110):
     bpy.context.view_layer.objects.active = rig
     path = os.path.join(OUT, name + ".glb")
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', use_selection=True, export_yup=True, export_skins=True,
-                              export_apply=False, export_animations=False, export_materials='EXPORT', export_cameras=False, export_lights=False)
+                              export_apply=False, export_animations=False, export_materials='EXPORT', export_cameras=False, export_lights=False, export_vertex_color='ACTIVE')
     xs = [c.x for c in simpos]; zs_ = [c.z for c in simpos]
     meta = dict(name=name, label=p["label"], kind=p["kind"], verts=len(sim.vertices), width=max(xs) - min(xs), height=max(zs_) - min(zs_), seconds=round(time.time() - t0, 1))
     print("EXPORTED", json.dumps(meta)); return meta
 
+def make_hangers():
+    for nm, hh in (("hanger_std", 0.10), ("hanger_tall", 0.16)):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        ob = hanger.build_hanger(w=0.215, hook_h=hh, name=nm)
+        wood = make_material("wood", (0.55, 0.36, 0.2, 1), 0.55); metal = make_material("metal", (0.75, 0.75, 0.78, 1), 0.3)
+        metal.node_tree.nodes["Principled BSDF"].inputs["Metallic"].default_value = 1.0
+        ob.data.materials.append(wood); ob.data.materials.append(metal)
+        bpy.context.view_layer.objects.active = ob; ob.select_set(True)
+        bpy.ops.export_scene.gltf(filepath=os.path.join(OUT, nm + ".glb"), export_format='GLB', use_selection=True, export_yup=True, export_materials='EXPORT')
+        print("EXPORTED", nm)
+
 if __name__ == "__main__":
     args = [a for a in sys.argv[sys.argv.index("--") + 1:]] if "--" in sys.argv else sys.argv[1:]
+    if "hangers" in args:
+        make_hangers(); sys.exit(0)
     names = args or list(styles.STYLES)
     metas = []
     mp = os.path.join(OUT, "meta.json")

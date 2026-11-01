@@ -4,7 +4,7 @@ from mathutils import Vector
 from mathutils.geometry import delaunay_2d_cdt
 from styles import half_outline
 
-STEP = 0.0145
+STEP = 0.0118
 
 def neck_curve(neck_w, depth, n=14):
     """Smooth scoop from the shoulder-neck point down to the centre."""
@@ -96,52 +96,89 @@ def triangulate(bpts):
     v, e, f, *_ = delaunay_2d_cdt([tuple(a) for a in verts], edges, [], 1, 1e-6)
     return v, f
 
+def make_zoner(p, polys):
+    th = math.radians(p["sleeve_angle"]); dxy = (math.cos(th), -math.sin(th)); nxy = (-math.sin(th), -math.cos(th))
+    hem, cuff, neck = p.get("rib_hem", 0), p.get("rib_cuff", 0), p.get("rib_neck", 0)
+    neck_polys = {side: [pt for k, pt in polys[side] if k == "neck"] for side in polys}
+    for side in neck_polys: neck_polys[side] = [(p["neck_w"], 0.0)] + neck_polys[side]
+    def zone(x, z, side):
+        if hem and z < -p["length"] + hem: return 1
+        sg = 1 if x >= 0 else -1
+        if cuff and abs(x) > p["chest"]:
+            Sx, Sz = sg * p["shoulder"], -p["shoulder_drop"]
+            t = (x - Sx) * sg * dxy[0] + (z - Sz) * dxy[1]
+            if t > p["sleeve_len"] - cuff: return 2
+        if neck and len(neck_polys[side]) > 2 and dist_to_poly((abs(x), z), neck_polys[side]) < neck: return 3
+        return 0
+    def uv1(x, z, zn, side):
+        sg = 1 if x >= 0 else -1
+        if zn == 0: return (x * 90, z * 90)
+        if zn == 1: return (x * 200, z * 50)
+        if zn == 2:
+            Sx, Sz = sg * p["shoulder"], -p["shoulder_drop"]
+            return (((x - Sx) * sg * nxy[0] + (z - Sz) * nxy[1]) * 200, ((x - Sx) * sg * dxy[0] + (z - Sz) * dxy[1]) * 50)
+        dep = p["neck_front"] if side == "front" else p["neck_back"]
+        zc = -dep * 0.4
+        return (math.atan2(z - zc, x) * p["neck_w"] * 200, math.hypot(x, z - zc) * 50)
+    return zone, uv1
+
+def smooth01(t):
+    t = max(0.0, min(1.0, t)); return t * t * (3 - 2 * t)
+
 def build(p, name):
-    """Returns (object, rest_info). Mesh verts: x, y(depth), z. Front panel faces use material 0 & uv left half, back panel uv right half."""
+    """Returns (object, rest_info). Mesh verts: x, y(depth), z. Front panel faces use uv in the left half of the atlas, back panel the right half.
+    Face material: 0 = fabric, 3 = rib. UV1 = micro detail / rib ridge coordinates."""
     me = bpy.data.meshes.new(name); ob = bpy.data.objects.new(name, me); bpy.context.collection.objects.link(ob)
-    bm = bmesh.new(); uv = bm.loops.layers.uv.new("UVMap")
+    bm = bmesh.new(); uv = bm.loops.layers.uv.new("UVMap"); uv1l = bm.loops.layers.uv.new("UV1")
     tagl = bm.verts.layers.int.new("seam")
-    panels = {}
-    allx = []; allz = []
+    panels, polys = {}, {}
+    allx, allz = [], []
     for side in ("front", "back"):
-        poly = outline(p, side); bpts = sample_boundary(poly)
+        poly = outline(p, side); polys[side] = poly; bpts = sample_boundary(poly)
         v, f = triangulate(bpts)
         panels[side] = (bpts, v, f)
         allx += [a[0] for a in v]; allz += [a[1] for a in v]
+    zone, uv1 = make_zoner(p, polys)
     xmin, xmax, zmin, zmax = min(allx), max(allx), min(allz), max(allz)
     zmax_uv = zmax + p.get('uv_top', 0.0)   # hoodie photos include the hood above the collar
-    gap = 0.02
+    gap = 0.02; bulge = p.get("bulge", 0.05)
+    # photo mapping: the body maps to the photo's body with the print kept round (isotropic); sleeves take the remaining width
+    tee = p["kind"] == "tee"; asp = 1.0 if tee else 0.92; hv = 0.93 if tee else 0.88
+    body_h = p["length"]; bf = max(0.55, min(0.95, (2 * p["chest"] / body_h) * hv * asp)); half_body = bf / 2
+    xabs = max(abs(xmin), abs(xmax))
+    def ufun(x):
+        ax = abs(x); sg = 1 if x >= 0 else -1
+        t = ax / p["chest"] * half_body if ax <= p["chest"] else half_body + (ax - p["chest"]) / max(1e-6, xabs - p["chest"]) * (0.5 - half_body)
+        return 0.5 + sg * min(0.5, t)
+    def vfun(z): return (1 - hv) + hv * (z - zmin) / (zmax_uv - zmin)
+    seam_pts = [pt for pt, tag in panels["front"][0] if tag == "seam"]
     for side in ("front", "back"):
         bpts, v, f = panels[side]
-        y = -gap / 2 if side == "front" else gap / 2
+        sgn = -1 if side == "front" else 1
         bv = []
         for i, (x, z) in enumerate(v):
+            d = min((math.hypot(x - q.x, z - q.y) for q in seam_pts), default=1.0)
+            y = sgn * (gap / 2 + bulge * smooth01(d / 0.11) ** 0.8)
             vert = bm.verts.new((x, y, z)); bv.append(vert)
-            if i < len(bpts) and bpts[i][1] == "seam":
-                vert[tagl] = 1
+            if i < len(bpts) and bpts[i][1] == "seam": vert[tagl] = 1
         for tri in f:
             vs = [bv[i] for i in tri]
-            if len(set(vs)) < 3:
-                continue
-            # winding so that normals face outwards (front: -Y, back: +Y)
-            try:
-                face = bm.faces.new(vs if side == "front" else vs[::-1])
-            except ValueError:
-                continue
+            if len(set(vs)) < 3: continue
+            try: face = bm.faces.new(vs if side == "front" else vs[::-1])
+            except ValueError: continue
+            cx = sum(vv.co.x for vv in vs) / 3; cz = sum(vv.co.z for vv in vs) / 3
+            zn = zone(cx, cz, side); face.material_index = 3 if zn else 0
             for loop in face.loops:
                 x, z = loop.vert.co.x, loop.vert.co.z
-                u = (x - xmin) / (xmax - xmin); vv = (z - zmin) / (zmax_uv - zmin)
+                u = ufun(x); vv = vfun(z)
                 loop[uv].uv = (u * 0.5, vv) if side == "front" else (0.5 + (1 - u) * 0.5, vv)
+                loop[uv1l].uv = uv1(x, z, zn, side)
     bm.normal_update()
-    # fix winding: make normals of the front panel face -Y
     for fc in bm.faces:
         cy = sum(vv.co.y for vv in fc.verts) / 3
-        if (cy < 0 and fc.normal.y > 0) or (cy > 0 and fc.normal.y < 0):
-            fc.normal_flip()
-    # weld the seams: pull welded verts to y = 0 and merge
+        if (cy < 0 and fc.normal.y > 0) or (cy > 0 and fc.normal.y < 0): fc.normal_flip()
     for vert in bm.verts:
-        if vert[tagl]:
-            vert.co.y = 0.0
+        if vert[tagl]: vert.co.y = 0.0
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=2e-4)
     bm.to_mesh(me); bm.free()
     for poly_ in me.polygons: poly_.use_smooth = True

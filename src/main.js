@@ -3,7 +3,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { PRODUCTS, SIZES, CATEGORIES, GARMENT_COLORS, CUSTOM_FEE, TYPE_LABEL, STYLE_OPTIONS, DEFAULT_STYLE } from './data.js';
 import { THEMES } from './themes.js';
 import { getProducts, placeOrder } from './api.js';
-import { makeHangerMaterial, styleHangerMaterial, buildGarmentItem, loadStyle } from './model.js';
+import { makeHangerMaterial, styleHangerMaterial, buildGarmentItem, loadStyle, loadHanger } from './model.js';
 import { loadImage, cutout, prepareGarment } from './imaging.js';
 import { createStudio } from './studio.js';
 import { generateMockups } from './mockups.js';
@@ -18,7 +18,7 @@ const store = {
   set(k, v) { try { localStorage.setItem('rack:' + k, JSON.stringify(v)); return true; } catch { return false; } },
 };
 
-let SP = 1.28; const RAIL_Y = 2.6, CAM_Z = 6.2, FOV = 38, TILT = -0.55;
+let SP = 1.7; const RAIL_Y = 2.6, CAM_Z = 6.2, FOV = 38, TILT = -0.3;
 const state = {
   products: [], cat: 'all', q: '', sort: 'featured', savedOnly: false, view: 'rack',
   saved: new Set(store.get('saved', [])), cart: store.get('cart', []), promo: null,
@@ -30,22 +30,32 @@ if (!THEMES[state.theme]) state.theme = 'boutique';
 const canvas = $('#scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.95;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.VSMShadowMap;
+renderer.toneMapping = THREE.NeutralToneMapping; renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 80);
-const hemi = new THREE.HemisphereLight(0xffffff, 0x999999, 0.5); scene.add(hemi);
-const key = new THREE.DirectionalLight(0xffffff, 1.7);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8478, 0.45); scene.add(hemi);
+const key = new THREE.DirectionalLight(0xffffff, 2.7);
 key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
-Object.assign(key.shadow.camera, { left: -7, right: 7, top: 5, bottom: -2, near: 1, far: 20 });
-key.shadow.bias = -0.0004; key.shadow.normalBias = 0.03;
-scene.add(key, key.target);
+Object.assign(key.shadow.camera, { left: -7, right: 7, top: 5, bottom: -2, near: 1, far: 24 });
+key.shadow.bias = -0.0006; key.shadow.normalBias = 0.04; key.shadow.radius = 7; key.shadow.blurSamples = 16;
+const fill = new THREE.DirectionalLight(0xdfe8ff, 0.7), rim = new THREE.DirectionalLight(0xffffff, 0.9);
+scene.add(key, key.target, fill, fill.target, rim, rim.target);
 
-const wallMat = new THREE.MeshStandardMaterial({ roughness: 0.95 });
+function surfaceTex(w, h, paint) { const c = document.createElement('canvas'); c.width = w; c.height = h; paint(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
+const grain = (x, w, h, n, a) => { for (let i = 0; i < n; i++) { const v = Math.random() * 255 | 0; x.fillStyle = `rgba(${v},${v},${v},${a})`; x.fillRect(Math.random() * w, Math.random() * h, 2, 2); } };
+const wallTex = surfaceTex(512, 512, (x, w, h) => {   // painted panel wall: wide horizontal boards with shadow gaps
+  x.fillStyle = '#f2f2f2'; x.fillRect(0, 0, w, h); grain(x, w, h, 5000, 0.05);
+  for (const y of [0, 256]) { x.fillStyle = 'rgba(0,0,0,.28)'; x.fillRect(0, y, w, 3); x.fillStyle = 'rgba(255,255,255,.8)'; x.fillRect(0, y + 3, w, 2); }
+});
+wallTex.repeat.set(24, 3);
+const floorTex = surfaceTex(512, 512, (x, w, h) => { x.fillStyle = '#e9e9e9'; x.fillRect(0, 0, w, h); grain(x, w, h, 14000, 0.09); });
+floorTex.repeat.set(30, 5);
+const wallMat = new THREE.MeshStandardMaterial({ roughness: 0.95, map: wallTex });
 const wall = new THREE.Mesh(new THREE.PlaneGeometry(120, 14), wallMat); wall.position.set(0, 4, -1.9); wall.receiveShadow = true; scene.add(wall);
-const floorMat = new THREE.MeshStandardMaterial({ roughness: 0.55 });
+const floorMat = new THREE.MeshStandardMaterial({ roughness: 0.8, map: floorTex });
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(120, 20), floorMat); floor.rotation.x = -Math.PI / 2; floor.position.set(0, 0, 4); floor.receiveShadow = true; scene.add(floor);
 const railMat = new THREE.MeshStandardMaterial({ metalness: 0.7, roughness: 0.3 });
 const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 120, 16), railMat); rail.rotation.z = Math.PI / 2; rail.position.y = RAIL_Y; rail.castShadow = true; scene.add(rail);
@@ -53,7 +63,7 @@ for (let x = -58; x <= 62; x += 4) { const r = new THREE.Mesh(new THREE.Cylinder
 const signs = new THREE.Group(); scene.add(signs);
 const signMat = new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false });
 for (let i = 0; i < 9; i++) { const s = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 0.9), signMat); s.position.set(0, 3.45, -1.85); s.userData.k = (i - 4) * 12; signs.add(s); }
-const hangerMat = makeHangerMaterial(THEMES[state.theme]);
+const hangerMat = makeHangerMaterial(THEMES[state.theme]); const hangerGltf = {};
 
 const themeSel = $('#theme');
 themeSel.innerHTML = Object.entries(THEMES).map(([k, t]) => `<option value="${k}">${t.name}</option>`).join('');
@@ -83,7 +93,7 @@ async function loadGarment(p) {
 const styleOf = p => p.style || DEFAULT_STYLE[p.type];
 function makeItem(product, G, gltf) {
   const cfg = { hex: null, colorName: 'Original', layers: [] };
-  const b = buildGarmentItem(product, cfg, hangerMat, G, gltf);
+  const b = buildGarmentItem(product, cfg, hangerMat, G, gltf, hangerGltf[styleOf(product).startsWith('hoodie') ? 'tall' : 'std']);
   const it = { product, cfg, b, G, i: seq++, x: 0, z: 0, ry: TILT, s: 0.001, ang: 0, angV: 0, tx: 0, visible: true, enter: 0 };
   b.pickables.forEach(m => (m.item = it)); b.root.position.y = RAIL_Y + 4; scene.add(b.root); items.push(it); return it;
 }
@@ -98,7 +108,7 @@ function layout(resetCam = true) {
   const list = items.filter(it => matches(it.product));
   const sorters = { featured: (a, b) => a.i - b.i, low: (a, b) => a.product.price - b.product.price, high: (a, b) => b.product.price - a.product.price, name: (a, b) => a.product.name.localeCompare(b.product.name) };
   list.sort(sorters[state.sort]); order = list;
-  SP = list.length < 8 ? 1.28 : 1.15;
+  SP = list.length < 8 ? 1.7 : 1.35;
   items.forEach(it => { it.visible = list.includes(it); });
   list.forEach((it, k) => { it.tx = (k - (list.length - 1) / 2) * SP; });
   viewR = Math.max(0, ((list.length - 1) / 2) * SP + 0.9 - halfView());
@@ -177,7 +187,8 @@ function frame() {
   cam.x += (cam.target - cam.x) * (1 - Math.exp(-dt * 6));
   const camV = (cam.x - cam.prev) / Math.max(dt, 1e-4); cam.prev = cam.x;
   camera.position.set(cam.x + ptr.nx * 0.12, 2.1 + ptr.ny * 0.1, CAM_Z); camera.lookAt(cam.x, 1.8, 0);
-  key.position.set(cam.x + 3, 7, 6); key.target.position.set(cam.x, 1, 0);
+  key.position.set(cam.x - 5, 7.5, 6.5); key.target.position.set(cam.x, 1, 0);
+  fill.position.set(cam.x + 6, 2.5, 6); fill.target.position.set(cam.x, 1, 0); rim.position.set(cam.x + 2, 5, -5); rim.target.position.set(cam.x, 1.5, 0);
   signs.children.forEach(s => (s.position.x = Math.round((cam.x - s.userData.k) / 12) * 12));
   if (!focus && ptr.inside && !ptr.down) setHover(pick()); else if (focus) setHover(null);
 
@@ -477,6 +488,7 @@ co.addEventListener('pointerdown', e => { if (e.target === co) closeCheckout(); 
     const seed = await getProducts(), mine = await loadUserProducts();
     mine.forEach(p => { p.photo = URL.createObjectURL(p.blob); });
     const all = [...seed, ...mine];
+    hangerGltf.std = await loadHanger(false); hangerGltf.tall = await loadHanger(true);
     const gltfs = Object.fromEntries(await Promise.all([...new Set(all.map(styleOf))].map(async id => [id, await loadStyle(id)])));
     const loaded = await Promise.all(all.map(p => loadGarment(p).then(G => [p, G]).catch(() => null)));
     loaded.filter(Boolean).forEach(([p, G]) => { state.products.push(p); makeItem(p, G, gltfs[styleOf(p)]); });

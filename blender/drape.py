@@ -2,14 +2,8 @@ import bpy, bmesh, math
 from mathutils import Vector
 
 def add_hanger_collider(p):
-    """Two sloped bars the shoulders rest on, so the garment holds a hanger-shaped shoulder line."""
-    w = p["pins"] + 0.02
-    verts = [(0, 0, 0.015), (w, 0, -0.045), (-w, 0, -0.045)]
-    me = bpy.data.meshes.new("hanger"); me.from_pydata(verts, [(0, 1), (0, 2)], []); me.update()
-    ob = bpy.data.objects.new("hanger", me); bpy.context.collection.objects.link(ob)
-    sk = ob.modifiers.new("skin", "SKIN"); 
-    for v in me.skin_vertices[0].data: v.radius = (0.006, 0.012)
-    ob.modifiers.new("sub", "SUBSURF")
+    import hanger
+    ob = hanger.build_hanger(w=p["pins"] + 0.03, collider=True, name="hanger_collider")
     bpy.context.view_layer.objects.active = ob
     ob.modifiers.new("col", "COLLISION")
     ob.collision.thickness_outer = 0.002
@@ -30,11 +24,11 @@ def drape(ob, p, frames=110, pin_x=None):
     bpy.context.view_layer.objects.active = ob
     cl = ob.modifiers.new("Cloth", "CLOTH")
     s = cl.settings
-    s.quality = 7; s.mass = p["mass"]; s.air_damping = 1.6
+    s.quality = 8; s.mass = p["mass"]; s.air_damping = 1.6
     s.tension_stiffness = 22; s.compression_stiffness = 22; s.shear_stiffness = 16
-    s.bending_stiffness = 0.35 * p["stiff"]; s.bending_damping = 0.8
+    s.bending_stiffness = 0.22 * p["stiff"]; s.bending_damping = 0.8
     s.tension_damping = 6; s.compression_damping = 6; s.shear_damping = 6
-    s.use_pressure = True; s.uniform_pressure_force = p.get('air', 0.28)
+    s.use_pressure = True; s.uniform_pressure_force = p.get('air', 0.38)
     s.vertex_group_mass = "pin"; s.pin_stiffness = 1.0
     c = cl.collision_settings
     c.use_collision = True; c.distance_min = 0.0035; c.collision_quality = 3

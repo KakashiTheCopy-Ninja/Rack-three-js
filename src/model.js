@@ -5,24 +5,11 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { composeSide } from './imaging.js';
 
 
-// ---------------------------------------------------------------- hanger
+// ---------------------------------------------------------------- hanger (wooden, from Blender)
 export function makeHangerMaterial(theme) {
-  return new THREE.MeshStandardMaterial({ color: theme.hanger, metalness: theme.hangerMetal ? 0.9 : 0.05, roughness: theme.hangerMetal ? 0.28 : 0.55 });
+  return { wood: new THREE.MeshStandardMaterial({ color: theme.wood, roughness: 0.55 }), metal: new THREE.MeshStandardMaterial({ color: theme.metal, metalness: 1, roughness: 0.28 }) };
 }
-export function styleHangerMaterial(mat, theme) {
-  mat.color.set(theme.hanger); mat.metalness = theme.hangerMetal ? 0.9 : 0.05; mat.roughness = theme.hangerMetal ? 0.28 : 0.55;
-}
-function buildHanger(drop, mat, halfW = 0.5, dy = 0.2) {
-  const g = new THREE.Group(), top = -(0.36 + drop), r = 0.075;
-  const pts = [new THREE.Vector3(0, top, 0), new THREE.Vector3(0, -r, 0)];
-  for (let a = 0; a <= 250; a += 15) { const t = THREE.MathUtils.degToRad(a); pts.push(new THREE.Vector3(0, -r * Math.cos(t), r * Math.sin(t))); }
-  const hook = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.1), 60, 0.011, 8), mat);
-  const path = new THREE.CurvePath(), A = new THREE.Vector3(-halfW, top - dy, 0), B = new THREE.Vector3(0, top, 0), C = new THREE.Vector3(halfW, top - dy, 0);
-  path.add(new THREE.LineCurve3(A, B)); path.add(new THREE.LineCurve3(B, C)); path.add(new THREE.LineCurve3(C, A));
-  const frame = new THREE.Mesh(new THREE.TubeGeometry(path, 90, 0.011, 8, true), mat);
-  hook.castShadow = frame.castShadow = true; g.add(hook, frame);
-  return g;
-}
+export function styleHangerMaterial(m, theme) { m.wood.color.set(theme.wood); m.metal.color.set(theme.metal); }
 
 // ---------------------------------------------------------------- garment (Blender-made, rigged, cloth-draped glTF)
 const loader = new GLTFLoader(), styleCache = new Map();
@@ -37,6 +24,35 @@ export function loadStyle(id) {
   if (!styleCache.has(id)) styleCache.set(id, fetchModel(id));
   return styleCache.get(id);
 }
+const hangerCache = new Map();
+export function loadHanger(tall) {
+  const id = tall ? 'hanger_tall' : 'hanger_std';
+  if (!hangerCache.has(id)) hangerCache.set(id, fetchModel(id));
+  return hangerCache.get(id);
+}
+
+// tiny tileable normal maps (fleece/knit grain, and 1x1 rib ridges) generated once
+function normalCanvas(size, height, strength) {
+  const c = document.createElement('canvas'); c.width = c.height = size; const x = c.getContext('2d'), img = x.createImageData(size, size);
+  const h = (i, j) => height(((i % size) + size) % size / size, ((j % size) + size) % size / size);
+  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) {
+    const dx = (h(i + 1, j) - h(i - 1, j)) * strength, dy = (h(i, j + 1) - h(i, j - 1)) * strength, l = Math.hypot(dx, dy, 1), k = (j * size + i) * 4;
+    img.data[k] = (-dx / l * 0.5 + 0.5) * 255; img.data[k + 1] = (-dy / l * 0.5 + 0.5) * 255; img.data[k + 2] = (1 / l * 0.5 + 0.5) * 255; img.data[k + 3] = 255;
+  }
+  x.putImageData(img, 0, 0); return c;
+}
+function makeNormalTex(canvas) {
+  const t = new THREE.CanvasTexture(canvas); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.channel = 1; t.anisotropy = 8; t.colorSpace = THREE.NoColorSpace; return t;
+}
+let knitTex, ribTex;
+function detailTextures() {
+  if (knitTex) return { knitTex, ribTex };
+  const seed = (i, j) => { const n = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return n - Math.floor(n); };
+  knitTex = makeNormalTex(normalCanvas(128, (u, v) => 0.55 * seed(Math.floor(u * 64), Math.floor(v * 64)) + 0.45 * (Math.sin(u * Math.PI * 16) * Math.sin(v * Math.PI * 16) * 0.5 + 0.5), 5));
+  ribTex = makeNormalTex(normalCanvas(64, u => Math.pow(Math.sin(u * Math.PI * 2 * 2) * 0.5 + 0.5, 1.2) + 0.05 * seed(Math.floor(u * 64), 3), 9));
+  return { knitTex, ribTex };
+}
+
 const Q = new THREE.Quaternion(), QA = new THREE.Quaternion(), V = new THREE.Vector3();
 const AX = new THREE.Vector3(1, 0, 0), AZ = new THREE.Vector3(0, 0, 1);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -47,30 +63,34 @@ class Spring {
   step(dt, force) { const a = force - this.w * this.w * this.x - 2 * this.z * this.w * this.v; this.v += a * dt; this.x = clamp(this.x + this.v * dt, -this.lim, this.lim); return this.x; }
 }
 
-export function buildGarmentItem(product, cfg, hangerMat, G, gltf) {
+export function buildGarmentItem(product, cfg, hangerMats, G, gltf, hangerGltf) {
   const root = new THREE.Group();
   const model = cloneSkinned(gltf.scene);
-  const hasHood = !!model.getObjectByName('hood1');
-  const drop = hasHood ? 0.3 : 0;
-  root.add(buildHanger(drop, hangerMat, 0.5, 0.2));
+  const tall = !!model.getObjectByName('hood1'), hookH = tall ? 0.16 : 0.10;
   const garment = new THREE.Group(); root.add(garment); garment.add(model);
+  const hang = cloneSkinned(hangerGltf.scene); garment.add(hang);
+  hang.traverse(o => { if (o.isMesh) { o.castShadow = true; o.material = (o.material.name || '').startsWith('metal') ? hangerMats.metal : hangerMats.wood; } });
 
-  const box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
-  const k = Math.min(3.3, (2.1 - drop) / size.y);
-  garment.scale.setScalar(k); garment.position.y = -0.4 - drop;
+  const box = new THREE.Box3().setFromObject(model);
+  const k = Math.min(3.3, 2.45 / (hookH - box.min.y));
+  garment.scale.setScalar(k); garment.position.y = -hookH * k;     // rail contact point = root origin
 
-  // -------- materials: fabric = photo atlas (front | back), plain = inside / rim / hood, cord = drawstrings
+  // -------- materials: fabric / rib = photo atlas + micro detail, plain = inside + hood, cord = drawstrings
   const atlas = document.createElement('canvas'); atlas.width = G.W * 2; atlas.height = G.H;
   const tex = new THREE.CanvasTexture(atlas); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8; tex.flipY = false;
-  const fabricMat = new THREE.MeshStandardMaterial({ color: 0x666666, map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.68, roughness: 1, toneMapped: false, side: THREE.DoubleSide });
-  const plainMat = new THREE.MeshStandardMaterial({ color: 0x666666, emissive: 0xffffff, emissiveIntensity: 0.68, roughness: 1, toneMapped: false, side: THREE.DoubleSide });
-  const cordMat = new THREE.MeshStandardMaterial({ color: 0xd6d0c2, roughness: 0.9, toneMapped: false, emissive: 0x777066, emissiveIntensity: 0.5 });
+  const { knitTex, ribTex } = detailTextures();
+  const cloth = (extra) => new THREE.MeshPhysicalMaterial({ roughness: 0.92, sheen: 1, sheenRoughness: 0.5, vertexColors: true, side: THREE.DoubleSide, ...extra });
+  const fabricMat = cloth({ map: tex, normalMap: knitTex, normalScale: new THREE.Vector2(0.55, 0.55) });
+  const ribMat = cloth({ map: tex, normalMap: ribTex, normalScale: new THREE.Vector2(1.1, 1.1) });
+  const plainMat = cloth({ color: 0xffffff, normalMap: knitTex, normalScale: new THREE.Vector2(0.4, 0.4) });
+  const cordMat = new THREE.MeshStandardMaterial({ color: 0xe4dfd2, roughness: 0.85 });
   const pickables = [];
   model.traverse(o => {
     if (!o.isMesh) return;
     o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true;
+    if (!o.geometry.attributes.color) o.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(o.geometry.attributes.position.count * 3).fill(1), 3));
     const n = (o.material.name || '').toLowerCase();
-    o.material = n.startsWith('fabric') ? fabricMat : n.startsWith('cord') ? cordMat : plainMat;
+    o.material = n.startsWith('fabric') ? fabricMat : n.startsWith('rib') ? ribMat : n.startsWith('cord') ? cordMat : plainMat;
     pickables.push(o);
   });
 
@@ -107,7 +127,8 @@ export function buildGarmentItem(product, cfg, hangerMat, G, gltf) {
       ctx.drawImage(composeSide(G, cfg, 'back'), G.W, 0);
       tex.needsUpdate = true;
       const c = new THREE.Color(base);
-      plainMat.color.copy(c).multiplyScalar(0.4); plainMat.emissive.copy(c);
+      plainMat.color.copy(c);
+      for (const m of [fabricMat, ribMat, plainMat]) m.sheenColor.copy(c).lerp(new THREE.Color(1, 1, 1), 0.45);
     },
     // called every frame with the item's position (rack units) and yaw: sleeves, body and hood swing from the motion
     drive(dt, x, z, ry) {
@@ -137,7 +158,7 @@ export function buildGarmentItem(product, cfg, hangerMat, G, gltf) {
       const c = document.createElement('canvas'); c.width = w; c.height = Math.round(w * G.aspect);
       c.getContext('2d').drawImage(front, 0, 0, c.width, c.height); return c.toDataURL('image/webp', 0.85);
     },
-    dispose() { tex.dispose(); fabricMat.dispose(); plainMat.dispose(); cordMat.dispose(); },
+    dispose() { tex.dispose(); fabricMat.dispose(); ribMat.dispose(); plainMat.dispose(); cordMat.dispose(); },
   };
   let front = null;
   api.refresh();
