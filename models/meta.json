@@ -1,0 +1,65 @@
+{
+ "tee_classic": {
+  "name": "tee_classic",
+  "label": "Classic tee",
+  "kind": "tee",
+  "verts": 8886,
+  "width": 0.5881996750831604,
+  "height": 0.695114545058459,
+  "seconds": 19.2
+ },
+ "tee_boxy": {
+  "name": "tee_boxy",
+  "label": "Boxy oversized tee",
+  "kind": "tee",
+  "verts": 9540,
+  "width": 0.6356259882450104,
+  "height": 0.594752196688205,
+  "seconds": 21.2
+ },
+ "tee_long": {
+  "name": "tee_long",
+  "label": "Long-sleeve tee",
+  "kind": "tee",
+  "verts": 10404,
+  "width": 0.88864666223526,
+  "height": 0.6862466847524047,
+  "seconds": 22.1
+ },
+ "sweat_crew": {
+  "name": "sweat_crew",
+  "label": "Crewneck sweatshirt",
+  "kind": "sweat",
+  "verts": 10248,
+  "width": 0.6491101682186127,
+  "height": 0.6707976039033383,
+  "seconds": 25.9
+ },
+ "sweat_oversized": {
+  "name": "sweat_oversized",
+  "label": "Oversized sweatshirt",
+  "kind": "sweat",
+  "verts": 12844,
+  "width": 0.538739413022995,
+  "height": 0.7803914556279778,
+  "seconds": 34.2
+ },
+ "hoodie_pullover": {
+  "name": "hoodie_pullover",
+  "label": "Pullover hoodie",
+  "kind": "hoodie",
+  "verts": 10868,
+  "width": 0.562944233417511,
+  "height": 0.698313117492944,
+  "seconds": 22.9
+ },
+ "hoodie_oversized": {
+  "name": "hoodie_oversized",
+  "label": "Oversized hoodie",
+  "kind": "hoodie",
+  "verts": 13588,
+  "width": 0.5452050864696503,
+  "height": 0.8127803246024996,
+  "seconds": 32.5
+ }
+}

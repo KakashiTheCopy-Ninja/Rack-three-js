@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="boutique">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Rack</title>
+<meta name="description" content="Browse a 3D clothing rack, customise your print and check out.">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="scene" aria-label="3D clothing rack. Use the arrow keys to move along the rail, Enter to open the hovered item."></canvas>
+
+<header class="topbar">
+  <a class="logo" href="#" id="logo">The Rack</a>
+  <nav class="chips" id="cats" aria-label="Categories"></nav>
+  <div class="tools">
+    <label class="search"><span class="sr">Search</span>
+      <input id="search" type="search" placeholder="Find a piece…  ( / )" autocomplete="off">
+    </label>
+    <select id="sort" aria-label="Sort">
+      <option value="featured">Featured</option>
+      <option value="low">Price: low → high</option>
+      <option value="high">Price: high → low</option>
+      <option value="name">Name</option>
+    </select>
+    <select id="theme" aria-label="Store template"></select>
+    <button class="icon-btn" id="addBtn" title="Upload a new product to the rack">＋ <span>Add product</span></button>
+    <button class="icon-btn" id="viewBtn" title="Switch between 3D rack and grid" aria-pressed="false">▦ <span>Grid</span></button>
+    <button class="icon-btn" id="savedBtn" title="Saved items" aria-pressed="false">♥ <b id="savedCount">0</b></button>
+    <button class="icon-btn cart-btn" id="cartBtn">Bag <b id="cartCount">0</b></button>
+  </div>
+</header>
+
+<div class="hint" id="hint"><span class="hint-dot"></span><span id="hintText">Move your cursor to the left or right edge to slide along the rack · hover a piece to pull it out · click to open, recolour and design it</span></div>
+<div class="tooltip" id="tooltip" hidden></div>
+<div class="rail-progress" id="progress"><i></i></div>
+<div class="empty" id="empty" hidden><p>Nothing on the rack matches that.</p><button class="btn ghost" id="clearFilters">Clear filters</button></div>
+<div class="loading" id="loading"><div class="spinner"></div><p>Hanging up the stock…</p></div>
+
+<section class="grid" id="grid" hidden aria-label="Product grid"></section>
+
+<aside class="panel" id="panel" aria-hidden="true" aria-label="Product details"></aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="drawer" id="cart" aria-hidden="true" aria-label="Shopping bag"></aside>
+
+<div class="modal" id="checkout" hidden role="dialog" aria-modal="true" aria-label="Checkout"></div>
+<div class="modal studio" id="studio" hidden></div>
+<div class="modal" id="mockups" hidden role="dialog" aria-modal="true" aria-label="Mockups"></div>
+<div class="modal" id="addProd" hidden role="dialog" aria-modal="true" aria-label="Add product"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
